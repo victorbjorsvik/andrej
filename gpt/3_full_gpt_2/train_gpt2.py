@@ -94,7 +94,7 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, targets=None):
         # idx is of shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
@@ -108,7 +108,10 @@ class GPT(nn.Module):
             x = block(x)
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x) # (B, T, vocab_size)
-        return logits
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
 
 
 
@@ -161,9 +164,10 @@ class GPT(nn.Module):
 
         return model
 
+##################################################################################
+####################                   SCRIPT                   ##################
+##################################################################################
 
-
-# ---------------------------------------------------------------------
 if __name__ == "__main__":
     print("**starting analysis**")
 
@@ -184,25 +188,37 @@ if __name__ == "__main__":
     tokens = enc.encode(text)
     B, T = 4, 32
     buf = torch.tensor(tokens[:B*T + 1])
+    buf = buf.to(device)
     x = buf[:-1].view(B, T)
     y = buf[1:].view(B, T)
 
+   
+   
     # get logits
     model = GPT(GPTConfig()) # Now initialized with random weights accoring to pytorch standard values
     model.to(device)
-    logits = model(x)
 
-    print(logits.shape)
+    # Optimize
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    for i in range(50):
+        optimizer.zero_grad()
+        logits, loss = model(x, y)
+        loss.backward()
+        optimizer.step()
+        print(f"step: {i}, loss: {loss.item()}")
+
+
+    print(loss.item())
     import sys; sys.exit(0)
 
     # prefix tokens
     model.eval()
     num_return_sequences = 5
     max_length = 30
-    # tokens = enc.encode("Hello, I am a large language model,") 
-    # tokens = torch.tensor(tokens, dtype=torch.long) # (9,)
-    # tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (5, 9)
-    # x = tokens.to(device)
+    tokens = enc.encode("Hello, I am a large language model,") 
+    tokens = torch.tensor(tokens, dtype=torch.long) # (9,)
+    tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (5, 9)
+    x = tokens.to(device)
 
     # generate! right now x is (B, T) where B=5, T=9
     torch.manual_seed(42)
