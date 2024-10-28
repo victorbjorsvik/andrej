@@ -10,7 +10,7 @@
 2. Initialize a GPU cluster on [Lambda websites](https://cloud.lambdalabs.com/instances) 
 3. Hop on a terminal and SSH into the cluster:
 ```bash
-ssh -i C:\Users\<USERNAME>\.ssh\LAMBDA_SSH.pem ubuntu@<111.111.111.111>
+ssh -i C:/Users/<USERNAME>/.ssh/LAMBDA_SSH.pem ubuntu@<XXX.XXX.XXX.XXX>
 ```
 4. Clone this repo:
 ```bash
