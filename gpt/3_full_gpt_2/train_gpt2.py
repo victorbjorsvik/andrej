@@ -68,7 +68,7 @@ class Block(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
-        x = x + self.MLP(self.ln_2(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
@@ -81,7 +81,7 @@ class GPTConfig:
     n_embd: int = 768 # embedding dimension 
 
 
-class GPT(nn.Module):
+>class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
