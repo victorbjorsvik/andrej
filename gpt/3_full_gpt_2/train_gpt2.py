@@ -187,20 +187,22 @@ if __name__ == "__main__":
     x = buf[:-1].view(B, T)
     y = buf[1:].view(B, T)
 
-
-    num_return_sequences = 5
-    max_length = 30
-
-    # model = GPT.from_pretrained('gpt2')
+    # get logits
     model = GPT(GPTConfig()) # Now initialized with random weights accoring to pytorch standard values
-    model.eval()
     model.to(device)
+    logits = model(x)
+
+    print(logits.shape)
+    import sys; sys.exit(0)
 
     # prefix tokens
-    tokens = enc.encode("Hello, I am a large language model,") 
-    tokens = torch.tensor(tokens, dtype=torch.long) # (9,)
-    tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (5, 9)
-    x = tokens.to(device)
+    model.eval()
+    num_return_sequences = 5
+    max_length = 30
+    # tokens = enc.encode("Hello, I am a large language model,") 
+    # tokens = torch.tensor(tokens, dtype=torch.long) # (9,)
+    # tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1) # (5, 9)
+    # x = tokens.to(device)
 
     # generate! right now x is (B, T) where B=5, T=9
     torch.manual_seed(42)
