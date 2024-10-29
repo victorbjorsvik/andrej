@@ -249,10 +249,13 @@ if __name__ == "__main__":
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         logits, loss = model(x, y)
-        import code; code.interact(local=locals())
         loss.backward()
         optimizer.step()
-        print(f"step: {i}, loss: {loss.item()}")
+        torch.cuda.synchronize()
+        print("pål")
+        t1 = time.time()
+        dt = (t1-t0) * 1000 # time difference in milliseconds
+        print(f"step: {i}, loss: {loss.item()}, time: {dt:.2f}ms")
 
 
     import sys; sys.exit(0)
