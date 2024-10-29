@@ -236,10 +236,13 @@ if __name__ == "__main__":
 
     # load batches of data
     train_loader = DataLoader(B=16, T=1024)
+
+    torch.set_float32_matmul_precision('high')
    
     # get logits
     model = GPT(GPTConfig()) 
     model.to(device)
+    model = torch.compile(model)
 
     # Optimize
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
@@ -248,14 +251,16 @@ if __name__ == "__main__":
         x, y = train_loader.next_batch()
         x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        logits, loss = model(x, y)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            logits, loss = model(x, y)
+            import code; code.interact(local=locals()) 
         loss.backward()
         optimizer.step()
         torch.cuda.synchronize()
-        print("pål")
         t1 = time.time()
         dt = (t1-t0) * 1000 # time difference in milliseconds
-        print(f"step: {i}, loss: {loss.item()}, time: {dt:.2f}ms")
+        tokens_per_sec = (train_loader.B * train_loader.T) / (t1-t0)
+        print(f"step: {i}, loss: {loss.item()}, time: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 
     import sys; sys.exit(0)
