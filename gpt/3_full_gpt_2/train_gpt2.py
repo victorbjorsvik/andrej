@@ -246,12 +246,12 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision('high')
    
     # get logits
-    model = GPT(GPTConfig()) 
+    model = GPT(GPTConfig(vocab_size=50304)) 
     model.to(device)
     model = torch.compile(model)
 
     # Optimize
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8) 
     for i in range(50):
         t0 = time.time()
         x, y = train_loader.next_batch()
@@ -261,12 +261,13 @@ if __name__ == "__main__":
             logits, loss = model(x, y)
             import code; code.interact(local=locals()) 
         loss.backward()
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         torch.cuda.synchronize()
         t1 = time.time()
         dt = (t1-t0) * 1000 # time difference in milliseconds
         tokens_per_sec = (train_loader.B * train_loader.T) / (t1-t0)
-        print(f"step: {i}, loss: {loss.item()}, time: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+        print(f"step: {i:4d} | loss: {loss.item():.6} | norm: {norm:.4f} | time: {dt:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
 
 
     import sys; sys.exit(0)
