@@ -34,12 +34,12 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention (materializes the large (T,T) matrix for all the queries and keys)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, T)
-
+       
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, T)
         # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
         # att = F.softmax(att, dim=-1)
         # y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
 
         y = y.transpose(1,2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
@@ -189,6 +189,31 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+    
+    def configure_optimizers(self, weight_decay, learning_rate, device):
+        # start with all the candidate parameters that require grad
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that are 2D will be weight decayed, otherwise no decay.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms will not
+        decay_params = [p for _, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for _, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_dacay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        # Create AdamW optimizer and use the fused version if it is availible
+        fused_availible = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        use_fused = fused_availible and 'cuda' in device
+        print(f"using fused AdamW {use_fused}")
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+
+        return optimizer
 #-----------------------------------------------------------
 class DataLoader:
     def __init__(self, B, T):
@@ -271,7 +296,6 @@ if __name__ == "__main__":
 
 
     # Optimize
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
     optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
     for step in range(max_steps):
         t0 = time.time()
