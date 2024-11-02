@@ -1,4 +1,7 @@
 import math
+import time
+import inspect
+import os
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -247,18 +250,42 @@ class DataLoader:
 ####################                   SCRIPT                   ##################
 ##################################################################################
 
-import time
+# Simple launch:
+# python train_gpt2.py
+# DDP launch for e.g. 8 GPUs:
+# torchrun --standalone --nproc_per_node=8 train_gpt2.py
+
 
 if __name__ == "__main__":
     print("**starting analysis**")
+    from torch.distributed import init_process_group, destroy_process_group
 
-    # autodetect device
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        device = "mps"
-    print(f"using device: {device}")
+    # set up DDP (distributed data parallel)
+    # torchrun command sets the env variables RANK, LOCAL_RANK, and WORLD_SIZE
+    ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+    if ddp:
+        # use of DDP atm demands CUDA, we set the device appropriately according to rank
+        assert torch.cuda.is_available(), "CUDA required for ddp"
+        init_process_group(backend='nccl')
+        ddp_rank = int(os.environ['RANK']) 
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        device = f'cuda:{ddp_local_rank}'
+        torch.cuda.set_device(device)
+        master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+    else:
+        # vanilla, non-DDP run
+        ddp_rank = 0
+        ddp_local_rank = 0
+        ddp_world_size = 1
+        master_process = True
+        # autodetect device
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        print(f"using device: {device}")
 
     # plant seed for reproducibility
     torch.manual_seed(1337)
@@ -269,11 +296,16 @@ if __name__ == "__main__":
     total_batch_size = 524_288 # 2**19 ~0.5M, in number of tokens
     B = 16 # Micro-batch size (make as big as GPU can handle)
     T = 1024 # Senquence length
-    assert total_batch_size % (B * T) == 0, "make sure total_batch_size is divisible by B * T"
-    grad_accum_steps = total_batch_size // (B * T)
-    print(f"total desired batch size {total_batch_size}")
-    print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+    assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
+    grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
+    if master_process:
+        print(f"total desired batch size {total_batch_size}")
+        print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
     
+    
+    print(f"I am GPU: {ddp_rank}")
+    print("Bye!")
+    import sys; sys.exit(0)
 
     # load batches of data
     train_loader = DataLoader(B=B, T=T)
