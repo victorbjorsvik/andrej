@@ -334,13 +334,13 @@ if __name__ == "__main__":
     # create model
     model = GPT(GPTConfig(vocab_size=50304)) # increase vocabsize to make it have more factors of 2
     model.to(device)
-    model = torch.compile(model)
+    model = torch.compile(model) # Cannot (per now) do this while generating and evaluating with HellaSwag 
     if ddp:
         model = DDP(model, device_ids=(ddp_local_rank))
     raw_model = model.module if ddp else model # always contains the raw unwrapped model
 
     # learning rate scheduele
-    max_lr = 6e-4
+    max_lr = 6e-4 * 2 # andrej used 6e-4
     min_lr = max_lr * 0.1
     warmup_steps = 200 # andrej used 715 (based on GPT2 paper)
     max_steps = 19073
@@ -357,15 +357,22 @@ if __name__ == "__main__":
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
         return min_lr + coeff * (max_lr - min_lr)
 
-
-
     # Optimize
     optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
+
+    # create the log directory we will write checkpoints to
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"log.txt")
+    with open(log_file, "w") as f: # open for writing to clear the file
+        pass
+
     for step in range(max_steps):
         t0 = time.time()
+        last_step = (step == max_steps - 1)
 
         # once in a while, evaluate our val loss
-        if step % 100 == 0:
+        if step % 250 == 0 or last_step:
             model.eval()
             val_loader.reset()
             with torch.no_grad():
@@ -382,6 +389,20 @@ if __name__ == "__main__":
                 dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
             if master_process:
                 print(f"validation loss: {val_loss_accum.item():.4f}")
+                with open(log_file, "a") as f:
+                    f.write(f"{step} val {val_loss_accum.item():.4f}\n")
+                if step > 0 and (step % 5000 == 0 or last_step):
+                    # write model checkpoints
+                    checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'config': raw_model.config,
+                        'step': step,
+                        'val_loss': val_loss_accum.item()
+                        # you might also want to add optimizer.state_dict() and
+                        # rng seeds etc., if you wanted to more exactly resume training
+                    }
+                    torch.save(checkpoint, checkpoint_path)
 
         # training loop
         model.train()
@@ -405,12 +426,16 @@ if __name__ == "__main__":
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         optimizer.step()
-        torch.cuda.synchronize() # wait for GPU to finish work (to not taint timing)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize() # wait for GPU to finish work (to not taint timing)
         t1 = time.time()
         dt = (t1-t0) # time difference in seconds
         tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
         tokens_per_sec = tokens_processed / dt
         if master_process:
-            print(f"step: {step:4d} | loss: {loss_accum.item():.6} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+            print(f"step: {step:5d} | loss: {loss_accum.item():.6} | lr: {lr:.4e} | norm: {norm:.4f} | dt: {dt*1000:.2f}ms | tok/sec: {tokens_per_sec:.2f}")
+            with open(log_file, "a") as f:
+                f.write(f"{step} train {loss_accum.item():.6f}\n")
+
     if ddp:
         destroy_process_group()
