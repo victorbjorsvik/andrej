@@ -396,11 +396,12 @@ if __name__ == "__main__":
                     checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
                     checkpoint = {
                         'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'model_args': model_args, # TODO ---> https://github.com/karpathy/nanoGPT/blob/master/train.py
                         'config': raw_model.config,
                         'step': step,
                         'val_loss': val_loss_accum.item()
-                        # you might also want to add optimizer.state_dict() and
-                        # rng seeds etc., if you wanted to more exactly resume training
+            
                     }
                     torch.save(checkpoint, checkpoint_path)
 
