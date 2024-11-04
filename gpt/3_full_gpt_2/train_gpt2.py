@@ -218,6 +218,7 @@ class GPT(nn.Module):
 #-----------------------------------------------------------
 def load_tokens(filename):
     npt = np.load(filename)
+    npt = npt.astype(np.int32) # from Github Errata
     ptt = torch.tensor(npt, dtype=torch.long)
     return ptt
 
