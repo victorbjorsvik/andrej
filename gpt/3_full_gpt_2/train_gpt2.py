@@ -67,7 +67,6 @@ class MLP(nn.Module):
         return x
 
 
-
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -191,7 +190,7 @@ class GPT(nn.Module):
 
         return model
     
-    def configure_optimizers(self, weight_decay, learning_rate, device):
+    def configure_optimizers(self, weight_decay, learning_rate, device_type):
         # start with all the candidate parameters that require grad
         param_dict = {pn: p for pn, p in self.named_parameters()}
         param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
@@ -210,7 +209,7 @@ class GPT(nn.Module):
         print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         # Create AdamW optimizer and use the fused version if it is availible
         fused_availible = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_availible and 'cuda' in device
+        use_fused = fused_availible and 'cuda' in device_type
         print(f"using fused AdamW {use_fused}")
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
 
@@ -307,6 +306,9 @@ if __name__ == "__main__":
             device = "mps"
         print(f"using device: {device}")
 
+    # from Github Errata
+    device_type = "cuda" if device.startswith("cuda") else "cpu"
+
     # plant seed for reproducibility
     torch.manual_seed(1337)
     if torch.cuda.is_available():
@@ -356,7 +358,7 @@ if __name__ == "__main__":
         return min_lr + coeff * (max_lr - min_lr)
 
     # Optimize
-    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
+    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device_type)
 
     # create the log directory we will write checkpoints to
     log_dir = "log"
@@ -379,7 +381,7 @@ if __name__ == "__main__":
                 for _ in range(val_loss_steps):
                     x, y = val_loader.next_batch()
                     x, y = x.to(device), y.to(device)
-                    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                    with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
                         logits, loss = model(x, y)
                     loss = loss / val_loss_steps
                     val_loss_accum += loss.detach()
@@ -395,7 +397,7 @@ if __name__ == "__main__":
                     checkpoint = {
                         'model': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
-                        'model_args': model_args, # TODO ---> https://github.com/karpathy/nanoGPT/blob/master/train.py
+                       # 'model_args': model_args, # TODO ---> https://github.com/karpathy/nanoGPT/blob/master/train.py
                         'config': raw_model.config,
                         'step': step,
                         'val_loss': val_loss_accum.item()
@@ -425,7 +427,7 @@ if __name__ == "__main__":
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         optimizer.step()
-        if torch.cuda.is_available():
+        if device_type == "cuda":
             torch.cuda.synchronize() # wait for GPU to finish work (to not taint timing)
         t1 = time.time()
         dt = (t1-t0) # time difference in seconds
