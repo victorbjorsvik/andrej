@@ -26,26 +26,16 @@ class CausalSelfAttention(nn.Module):
         
     def forward(self, x):
         B, T, C = x.size() # batch size(B), sequence length(T), embedding_dimensionality(n_embd)
-        # calculate query, key, value for all heads in batch and move head forward to be the batch 
-        # nh is the "number of heads", hs is "head size", and C (number of channels) = nh * hs 
-        # e.g. in GPT-2 (124M), nh=12, hs=64 => 12*64=C=768 channels in the transformer
         qkv = self.c_attn(x)
         q, k, v = qkv.split(self.n_embd, dim=2)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        # attention (materializes the large (T,T) matrix for all the queries and keys)
-       
-        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # (B, nh, T, T)
-        # att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        # att = F.softmax(att, dim=-1)
-        # y = att @ v # (B, nh, T, T) @ (B, nh, T, hs) -> (B, nh, T, hs)
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True) # flash attention
-
         y = y.transpose(1,2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
-        # output projection
-        y = self.c_proj(y)
+        y = self.c_proj(y) # output projection
         return y
+
 
 class TanhGELU(nn.Module):
     def forward(self, input):
@@ -138,8 +128,6 @@ class GPT(nn.Module):
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
-
-
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -383,8 +371,8 @@ if __name__ == "__main__":
                     x, y = x.to(device), y.to(device)
                     with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
                         logits, loss = model(x, y)
-                    loss = loss / val_loss_steps
                     val_loss_accum += loss.detach()
+                val_loss_accum /= val_loss_steps # diff from Andrej - less prone to floating point errors: https://github.com/karpathy/build-nanogpt/pull/19/files
             if ddp:
                 dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
             if master_process:
