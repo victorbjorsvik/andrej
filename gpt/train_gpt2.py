@@ -338,7 +338,7 @@ if __name__ == "__main__":
 
     # gradient accumulation configuration
     total_batch_size = 524_288 # 2**19 ~0.5M, in number of tokens
-    B = 16 # Micro-batch size (make as big as GPU can handle)
+    B = 32 # Micro-batch size (make as big as GPU can handle)
     T = 1024 # Senquence length
     assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
     grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
@@ -356,16 +356,16 @@ if __name__ == "__main__":
     # Create a log directory for writing checkpoints and logging
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"log.txt")
+    log_file = os.path.join(log_dir, f"log_2.txt")
 
     # Start / Resume Training
-    resume_training = False
+    resume_training = True
     if resume_training:
         # get latest checkpoint file
         checkpoint_files = [f for f in os.listdir(log_dir) if f.startswith("model_") and f.endswith(".pt")]
         assert len(checkpoint_files) > 0, "no checkpoints found"
         checkpoint_files = sorted(checkpoint_files)
-        last_checkpoint = checkpoint_files[:-1]
+        last_checkpoint = checkpoint_files[-1]
         checkpoint_path = os.path.join(log_dir, last_checkpoint)
         checkpoint = torch.load(checkpoint_path, map_location=device)
         # load model state
@@ -391,12 +391,34 @@ if __name__ == "__main__":
         with open(log_file, "w") as f: # open for writing to clear the file
             pass
     
+    def unwrap_model(model):
+        # Unwrap DDP
+        if hasattr(model, 'module'):
+            model = model.module
+        # Unwrap torch.compile
+        if hasattr(model, '_orig_mod'):
+            model = model._orig_mod
+        return model
+
     use_compile = True
     if use_compile:
         model = torch.compile(model) # Cannot (per now) do this while generating and evaluating with HellaSwag 
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
-    raw_model = model.module if ddp else model # always contains the raw unwrapped model
+   
+    # Modified code starts here
+    # Define the unwrap_model function
+    def unwrap_model(model):
+        # Unwrap DistributedDataParallel (if used)
+        if hasattr(model, "module"):
+            model = model.module
+        # Unwrap torch.compile() (if used)
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+        return model
+
+    # Use the unwrap_model function to get the raw model
+    raw_model = unwrap_model(model)
 
     # learning rate scheduele
     max_lr = 6e-4 * 2 # andrej used 6e-4
@@ -440,7 +462,7 @@ if __name__ == "__main__":
                 print(f"validation loss: {val_loss_accum.item():.4f}")
                 with open(log_file, "a") as f:
                     f.write(f"{step} val {val_loss_accum.item():.4f}\n")
-                if step > 0 and (step % 5000 == 0 or last_step):
+                if step > 0 and (step % 250 == 0 or last_step):
                     # write model checkpoints
                     train_loader_checkpoint = {'current_shard': train_loader.current_shard, 'current_position': train_loader.current_position}
                     checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
