@@ -215,7 +215,9 @@ class DataLoader:
         self.T = T
         self.process_rank = process_rank
         self.num_processes = num_processes
+        self.split = split
         assert split in {'train', 'val'}
+        self.rng = np.random.default_rng(1337)
 
         # get shard filenames
         data_root = "edu_fineweb10B"
@@ -228,11 +230,37 @@ class DataLoader:
         if master_process:
             print(f"found {len(shards)} shards for split {split}")
         self.reset()
-    
+
+    def load_shard(self, filename): # added from PR to avoid periodisation in training: https://github.com/karpathy/build-nanogpt/pull/52/files
+        shard = load_tokens(filename)
+        if self.split == 'train':
+            # split tokens into documents using the <|endoftext|> special token and shuffle
+            eot_positions = (torch.where(shard == enc.eot_token)[0] + 1).tolist()
+            documents = [shard[start:end] for start, end in zip([0] + eot_positions[:-1], eot_positions)]
+            self.rng.shuffle(documents)
+            shard = torch.cat(documents) # concatenate the documents back together
+        return shard
+
+    def set(self, loader_checkpoint):
+        self.current_position = loader_checkpoint['current_position'] + self.B * self.T * self.process_rank # we add the B*T*process_rank to the position to make sure it is the correct position for each process
+        self.current_shard = loader_checkpoint['current_shard']
+        self.tokens = load_tokens(self.shards[self.current_shard])
+        # if loading the next batch would be out of bounds, advance to next shard
+        if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
+            self.current_shard += 1
+            # reshuffle after each epoch
+            if self.current_shard == len(self.shards):
+                self.reset()
+            else:
+                self.tokens = self.load_shard(self.shards[self.current_shard])
+                self.current_position = B * T * self.process_rank
+
     def reset(self):
         # state, init at shard zero
         self.current_shard = 0
-        self.tokens = load_tokens(self.shards[self.current_shard])
+        if self.split == 'train':
+            self.rng.shuffle(self.shards)
+        self.tokens = self.load_shard(self.shards[self.current_shard])
         self.current_position = self.B * self.T * self.process_rank
 
     def next_batch(self):
@@ -244,9 +272,13 @@ class DataLoader:
         self.current_position += B * T * self.num_processes
         # if loading the next batch would be out of bounds, advance to next shard
         if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
-            self.current_shard = (self.current_shard + 1) % len(self.shards)
-            self.tokens = load_tokens(self.shards[self.current_shard])
-            self.current_position = B * T * self.process_rank
+            self.current_shard += 1
+            # reshuffle after each epoch
+            if self.current_shard == len(self.shards):
+                self.reset()
+            else:
+                self.tokens = self.load_shard(self.shards[self.current_shard])
+                self.current_position = B * T * self.process_rank
         return x, y
     
 
@@ -302,6 +334,8 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed(1337)
 
+    enc = tiktoken.get_encoding("gpt2")
+
     # gradient accumulation configuration
     total_batch_size = 524_288 # 2**19 ~0.5M, in number of tokens
     B = 16 # Micro-batch size (make as big as GPU can handle)
@@ -318,13 +352,50 @@ if __name__ == "__main__":
     val_loader = DataLoader(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split="val")
 
     torch.set_float32_matmul_precision('high')
-   
-    # create model
-    model = GPT(GPTConfig(vocab_size=50304)) # increase vocabsize to make it have more factors of 2
-    model.to(device)
-    model = torch.compile(model) # Cannot (per now) do this while generating and evaluating with HellaSwag 
+
+    # Create a log directory for writing checkpoints and logging
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"log.txt")
+
+    # Start / Resume Training
+    resume_training = False
+    if resume_training:
+        # get latest checkpoint file
+        checkpoint_files = [f for f in os.listdir(log_dir) if f.startswith("model_") and f.endswith(".pt")]
+        assert len(checkpoint_files) > 0, "no checkpoints found"
+        checkpoint_files = sorted(checkpoint_files)
+        last_checkpoint = checkpoint_files[:-1]
+        checkpoint_path = os.path.join(log_dir, last_checkpoint)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        # load model state
+        model = GPT(checkpoint['config'])
+        model.to(device)
+        model.load_state_dict(checkpoint['model'])
+        # load optimizer state
+        optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device_type)
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        # load step (which will also load learning rate)
+        current_step = checkpoint['step'] + 1
+        # load traning data state
+        train_loader.set(checkpoint['train_loader'])
+        if master_process:
+            print(f"resuming training from step {current_step} with a validation loss of {checkpoint['val_loss']:.4f}")
+    else:
+        # create model
+        model = GPT(GPTConfig(vocab_size=50304)) # increase vocabsize to make it have more factors of 2
+        model.to(device)
+        current_step = 0
+        optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device_type)
+        # clear the log file
+        with open(log_file, "w") as f: # open for writing to clear the file
+            pass
+    
+    use_compile = True
+    if use_compile:
+        model = torch.compile(model) # Cannot (per now) do this while generating and evaluating with HellaSwag 
     if ddp:
-        model = DDP(model, device_ids=(ddp_local_rank))
+        model = DDP(model, device_ids=[ddp_local_rank])
     raw_model = model.module if ddp else model # always contains the raw unwrapped model
 
     # learning rate scheduele
@@ -345,17 +416,7 @@ if __name__ == "__main__":
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
         return min_lr + coeff * (max_lr - min_lr)
 
-    # Optimize
-    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device_type=device_type)
-
-    # create the log directory we will write checkpoints to
-    log_dir = "log"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"log.txt")
-    with open(log_file, "w") as f: # open for writing to clear the file
-        pass
-
-    for step in range(max_steps):
+    for step in range(current_step, max_steps):
         t0 = time.time()
         last_step = (step == max_steps - 1)
 
@@ -381,14 +442,15 @@ if __name__ == "__main__":
                     f.write(f"{step} val {val_loss_accum.item():.4f}\n")
                 if step > 0 and (step % 5000 == 0 or last_step):
                     # write model checkpoints
+                    train_loader_checkpoint = {'current_shard': train_loader.current_shard, 'current_position': train_loader.current_position}
                     checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
                     checkpoint = {
                         'model': raw_model.state_dict(),
                         'optimizer': optimizer.state_dict(),
-                       # 'model_args': model_args, # TODO ---> https://github.com/karpathy/nanoGPT/blob/master/train.py
                         'config': raw_model.config,
                         'step': step,
-                        'val_loss': val_loss_accum.item()
+                        'val_loss': val_loss_accum.item(),
+                        'train_loader': train_loader_checkpoint,
             
                     }
                     torch.save(checkpoint, checkpoint_path)
