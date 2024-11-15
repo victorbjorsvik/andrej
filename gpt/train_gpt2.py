@@ -283,6 +283,30 @@ class DataLoader:
         return x, y
     
 
+# -----------------------------------------------------------------------------
+# helper function for HellaSwag eval
+# takes tokens, mask, and logits, returns the index of the completion with the lowest loss
+
+def get_most_likely_row(tokens, mask, logits):
+    # evaluate the autoregressive loss at all positions
+    shift_logits = (logits[..., :-1, :]).contiguous()
+    shift_tokens = (tokens[..., 1:]).contiguous()
+    flat_shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    flat_shift_tokens = shift_tokens.view(-1)
+    shift_losses = F.cross_entropy(flat_shift_logits, flat_shift_tokens, reduction='none')
+    shift_losses = shift_losses.view(tokens.size(0), -1)
+    # now get the average loss just for the completion region (where mask == 1), in each row
+    shift_mask = (mask[..., 1:]).contiguous() # we must shift mask, so we start at the last prompt token
+    masked_shift_losses = shift_losses * shift_mask
+    # sum and divide by the number of 1s in the mask
+    sum_loss = masked_shift_losses.sum(dim=1)
+    avg_loss = sum_loss / shift_mask.sum(dim=1)
+    # now we have a loss for each of the 4 completions
+    # the one with the lowest loss should be the most likely
+    pred_norm = avg_loss.argmin().item()
+    return pred_norm
+
+
 ##################################################################################
 ####################                   SCRIPT                   ##################
 ##################################################################################
@@ -360,7 +384,7 @@ if __name__ == "__main__":
     log_file = os.path.join(log_dir, f"log_2.txt")
 
     # Start / Resume Training
-    resume_training = True
+    resume_training = False
     if resume_training:
         # get latest checkpoint file
         checkpoint_files = [f for f in os.listdir(log_dir) if f.startswith("model_") and f.endswith(".pt")]
@@ -463,7 +487,7 @@ if __name__ == "__main__":
                 print(f"validation loss: {val_loss_accum.item():.4f}")
                 with open(log_file, "a") as f:
                     f.write(f"{step} val {val_loss_accum.item():.4f}\n")
-                if step > 0 and (step % 250 == 0 or last_step):
+                if step > 0 and (step % 2500 == 0 or last_step):
                     # write model checkpoints
                     train_loader_checkpoint = {'current_shard': train_loader.current_shard, 'current_position': train_loader.current_position}
                     checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
@@ -479,10 +503,13 @@ if __name__ == "__main__":
                     torch.save(checkpoint, checkpoint_path)
 
 
-        # HellaSwag Eval TODO: fix this to be compatible with torch.compile
+        # HellaSwag Eval
         if (step % 250 == 0 or last_step):
             num_correct_norm = 0
             num_total = 0
+            # Use unwrapped (uncompiled) model for evaluation
+            model_for_eval = unwrap_model(model)
+            model_for_eval.eval()
             for i, example in enumerate(iterate_examples("val")):
                 # only process examples where i % ddp_world_size == ddp_rank
                 if i % ddp_world_size != ddp_rank:
@@ -494,7 +521,7 @@ if __name__ == "__main__":
                 # get the logits
                 with torch.no_grad():
                     with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-                        logits, loss = model(tokens)
+                        logits, loss = model_for_eval(tokens)
                     pred_norm = get_most_likely_row(tokens, mask, logits)
                 num_total += 1
                 num_correct_norm += int(pred_norm == label)
@@ -511,6 +538,7 @@ if __name__ == "__main__":
                 print(f"HellaSwag accuracy: {num_correct_norm}/{num_total}={acc_norm:.4f}")
                 with open(log_file, "a") as f:
                     f.write(f"{step} hella {acc_norm:.4f}\n")
+
 
         # training loop
         model.train()
