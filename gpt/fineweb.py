@@ -43,7 +43,7 @@ def write_datafile(filename, tokens_np):
 
 def main():
     # tokenize all documents and write output shards, each of shard_size tokens (last shard has remainder)
-    nprocs = max(1, os.cpu_count())
+    nprocs = max(1, os.cpu_count() - 5)
     with mp.Pool(nprocs) as pool:
         shard_index = 0
         # preallocate buffer to hold current shard

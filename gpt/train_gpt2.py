@@ -363,7 +363,7 @@ if __name__ == "__main__":
 
     # gradient accumulation configuration
     total_batch_size = 524_288 # 2**19 ~0.5M, in number of tokens
-    B = 32 # Micro-batch size (make as big as GPU can handle)
+    B = 64 # Micro-batch size (make as big as GPU can handle)
     T = 1024 # Senquence length
     assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
     grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
@@ -381,7 +381,7 @@ if __name__ == "__main__":
     # Create a log directory for writing checkpoints and logging
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"log_2.txt")
+    log_file = os.path.join(log_dir, f"log_final.txt")
 
     # Start / Resume Training
     resume_training = False
