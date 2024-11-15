@@ -384,7 +384,7 @@ if __name__ == "__main__":
     log_file = os.path.join(log_dir, f"log_final.txt")
 
     # Start / Resume Training
-    resume_training = False
+    resume_training = True
     if resume_training:
         # get latest checkpoint file
         checkpoint_files = [f for f in os.listdir(log_dir) if f.startswith("model_") and f.endswith(".pt")]
