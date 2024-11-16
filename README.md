@@ -1,7 +1,20 @@
-# MINI-GPT
+# MINI-GPT2
 > Personal repo for follow-along with Andrej Karapathy's nano-GPT2. In this repo I have tried to implement alll corrections from *errata* and also several elements from PR (e.g. shuffling fineweb to avoid periodization issue)
 
+In this repo we build the library [nano-GPT](https://github.com/karpathy/build-nanogpt/tree/master) together with Andrej Karpathy and his video [GPT2 - the movie](https://www.youtube.com/watch?v=l8pRSuU81PU). We managed to replicate the model and gain significatn efficieny improvements during training:
+![alt text](eval.png)
 
+We also adressed several of the issues Andrej had throughout the video including:
+1. Seasonality in training data
+2. Unable to use `torch.compile` while doing HellaSwag evals in the training loop
+3. More aggressive learning rate and schema
+4. Enabled resuming training based on last model checkpoint
+5. All the issues mentioned in Andrej's Errata in his repo
+6. Several other improvements suggested in PRs in Andrej's repo
+
+During training i managed to get a dt of ~ 0.34 per step and processed ~ 1.5M tokens per second. I trained the model for 1 epoch (~10B tokens) in under 2 hrs on 8 A100 (80 GB SXM4) GPUs. This gave me a min training loss of **2.84857**, min validation loss of **3.0383** and a max HellaSwag eval of **0.3101**. Model checkpoints can be provided upon request
+
+**Learn from my mistakes**: download the *fineweb* data and upload it to the cloud (e.g. Google Cloud). You can then download the training data form your cloud when in the GPU cluster instead of running the fineweb script (which can run for up to 1 hr depending on latency / intenet speed). This would have saved me around 15$.
 
 
 ---
@@ -33,7 +46,7 @@ conda env create -f environment.yml
 7. Rock n' Roll
 
 ---
-## Instructions on setting up Google Cloud CLI (for uploading model states)
+## Instructions on setting up Google Cloud CLI (for uploading model states and training data)
 [*Link to google cloud storage*](https://console.cloud.google.com/storage/browser)
 
 

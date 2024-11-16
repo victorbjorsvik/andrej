@@ -449,7 +449,7 @@ if __name__ == "__main__":
     max_lr = 6e-4 * 2 # andrej used 6e-4
     min_lr = max_lr * 0.1
     warmup_steps = 200 # andrej used 715 (based on GPT2 paper)
-    max_steps = 19073
+    max_steps = 19073 # 19,073 steps is ~1 epoch, if data is 10B tokens and batch size 0.5M tokens
     def get_lr(it):
         # 1) linear warmup for warmup_iters steps
         if it < warmup_steps:
