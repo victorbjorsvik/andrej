@@ -21,7 +21,7 @@ During training i managed to get a dt of ~ 0.34 per step and processed ~ 1.5M to
 ## Instructions on setting up lambda cluster
 1. Make sure to have your conda env config file (environment.yml) up to date.
 2. Initialize a GPU cluster on [Lambda websites](https://cloud.lambdalabs.com/instances) 
-3. Hop on a terminal and SSH into the cluster:
+3. Hop on a terminal and SSH into the cluster (on Windows):
 ```bash
 ssh -i C:/Users/<USERNAME>/.ssh/LAMBDA_SSH.pem ubuntu@<XXX.XXX.XXX.XXX>
 ```
