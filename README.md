@@ -27,7 +27,7 @@ ssh -i C:/Users/<USERNAME>/.ssh/LAMBDA_SSH.pem ubuntu@<XXX.XXX.XXX.XXX>
 ```
 4. Clone this repo:
 ```bash
-git clone https://github.com/victorbjorsvik/andrej.git
+git clone https://github.com/victorbjorsvik/minigpt.git
 ```
 5. Install MiniConda:
 ```bash
