@@ -430,17 +430,6 @@ if __name__ == "__main__":
         model = torch.compile(model) # Cannot (per now) do this while generating and evaluating with HellaSwag 
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
-   
-    # Modified code starts here
-    # Define the unwrap_model function
-    def unwrap_model(model):
-        # Unwrap DistributedDataParallel (if used)
-        if hasattr(model, "module"):
-            model = model.module
-        # Unwrap torch.compile() (if used)
-        if hasattr(model, "_orig_mod"):
-            model = model._orig_mod
-        return model
 
     # Use the unwrap_model function to get the raw model
     raw_model = unwrap_model(model)
@@ -463,6 +452,8 @@ if __name__ == "__main__":
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
         return min_lr + coeff * (max_lr - min_lr)
 
+
+    ### training loop ###
     for step in range(current_step, max_steps):
         t0 = time.time()
         last_step = (step == max_steps - 1)
@@ -502,7 +493,6 @@ if __name__ == "__main__":
                     }
                     torch.save(checkpoint, checkpoint_path)
 
-
         # HellaSwag Eval
         if (step % 250 == 0 or last_step):
             num_correct_norm = 0
@@ -540,7 +530,7 @@ if __name__ == "__main__":
                     f.write(f"{step} hella {acc_norm:.4f}\n")
 
 
-        # training loop
+        # forward pass, backward pass
         model.train()
         optimizer.zero_grad()
         loss_accum = 0.0
